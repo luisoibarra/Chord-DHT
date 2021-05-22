@@ -11,9 +11,18 @@ sys.excepthook = Pyro4.util.excepthook
 class FingerTableEntry:
     
     def __init__(self, node_key:int, entry_bit:int, total_bits:int, successor:int=None):
-        self.start = (node_key + (1 << entry_bit)) % (1 << total_bits)
-        self.end = (self.start + (1 << (total_bits - 1))) % (1 << total_bits)
+        if entry_bit == 0: # Predecessor
+            entry_bit = 1 # To avoid negative shift
+
+        self.start = (node_key + (1 << (entry_bit - 1))) % (1 << total_bits)
+        self.end = (self.start + (1 << (entry_bit - 1))) % (1 << total_bits)
         self.successor = successor
+
+    def __str__(self):
+        return f"{self.start} - {self.end}   {self.successor}"
+
+    def __repr__(self):
+        return str(self)
 
 @pyro.expose
 class ChordNode:
@@ -46,13 +55,23 @@ class ChordNode:
 
     predecessor = property(_get_predecessor, _set_predecessor)
     
-    @property
-    def id(self):
+    def _get_id(self):
         return self._id
     
-    def __init__(self):
+    def _set_id(self, value):
+        """
+        Set node id.  
+        Id can't change once setted. 
+        """
+        if self._id == None:
+            self._id = value
+    
+    id = property(_get_id, _set_id)
+    
+    def __init__(self, forced_id=None):
         self.listeners = []
         self._id = None
+        self.id = forced_id
         self.bits = None
         self.running = False
         self.executor = ThreadPoolExecutor()
@@ -69,6 +88,29 @@ class ChordNode:
         """
         self.listeners.append(listener)
     
+    def cli_loop(self):
+        """
+        Command Line Interface to talk with ChordNode
+        """
+        command = None
+        while True:
+            command = input()
+            if command == "ft":
+                print(self.finger_table)
+            elif command == "id":
+                print(self.id)
+            elif command == "exit":
+                self.leave()
+                break
+            else:
+                print("Invalid command")
+    
+    def leave(self):
+        """
+        Leave DHT table
+        """
+        pass
+    
     @method_logger
     def start(self, coordinator_address):
         """
@@ -76,6 +118,9 @@ class ChordNode:
         In case initial_node is None the the current node is the first in the DHT. 
         """
         self.running = True
+        
+        self.executor.submit(self.cli_loop)
+        
         with pyro.Daemon() as daemon:
             self.daemon = daemon
             
@@ -92,7 +137,7 @@ class ChordNode:
             
             # Register node in pyro name server and deamon
             self.dir = daemon.register(self)
-            self._id = ChordNode.hash(self.dir) % (1 << self.bits)
+            self.id = ChordNode.hash(self.dir) % (1 << self.bits)
             with pyro.locateNS() as ns:
                 ns.register(ChordNode.node_name(self.id), self.dir)
             
@@ -132,9 +177,11 @@ class ChordNode:
         """
         current = self
         
-        while not (self.in_between(key, current.id, current.successor)):
+        while not (self.in_between(key, current.id + 1, current.successor + 1)):
             current_id = current.closest_preceding_finger(key)
             current = self.get_node_proxy(current_id)
+            #QUITAR
+            print(key, current.id, current.successor)
         return current.id
     
     def closest_preceding_finger(self, key):
@@ -142,7 +189,7 @@ class ChordNode:
         Return the closest preceding finger node's id from key
         """
         for i in range(self.bits,0,-1):
-            if self.in_between(self.finger_table[i].successor, self.id, key):
+            if self.in_between(self.finger_table[i].successor, self.id + 1, key):
                 return self.finger_table[i].successor
         return self.id
     
@@ -168,7 +215,8 @@ class ChordNode:
             self.finger_table = [FingerTableEntry(self.id, i, self.bits, self.id) for i in range(self.bits+1)]
         else:
             self.init_finger_table(initial_node)
-            self.update_others()
+            self.executor.submit(self.update_others) # Let the current node accept RPC from now on
+            # self.update_others()
     
     @method_logger
     def init_finger_table(self, initial_node):
@@ -179,10 +227,10 @@ class ChordNode:
         
         successor_id = self.finger_table[1].successor = initial_node.find_successor(self.finger_table[1].start)
         successor_node = self.get_node_proxy(successor_id)
-        
+        # Update predecessors
         self.predecessor = successor_node.predecessor
         successor_node.predecessor = self.id
-        
+        # Update finger table
         for i in range(1, self.bits):
             upper_entry = self.finger_table[i+1]
             current_entry = self.finger_table[i]
@@ -197,15 +245,20 @@ class ChordNode:
         Update finger tables of nodes that should include this node
         """
         for i in range(1, self.bits + 1):
-            pred_id = self.find_predecessor((self.id - (1 << i-1)) % (1 << self.bits))
+            pred_id = self.find_predecessor((self.id - (1 << (i-1))) % (1 << self.bits))
             pred_node = self.get_node_proxy(pred_id)
             pred_node.update_finger_table(self.id, i)
+            #QUITAR
+            print("Updated with", self.id, i)
                 
     @method_logger
     def update_finger_table(self, s, i):
         """
         Updates figer table at i if s is better suited
         """
+        if self.id == s:
+            return
+        
         if self.in_between(s, self.id, self.finger_table[i].successor):
             self.finger_table[i].successor = s
             pred_node = self.get_node_proxy(self.predecessor)

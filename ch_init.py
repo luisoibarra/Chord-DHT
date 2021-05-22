@@ -7,7 +7,11 @@ if __name__ == "__main__":
     import logging as log
     log.basicConfig(level=log.DEBUG)
     try:
-        ch1 = ChordNode()
+        if len(sys.argv) > 1:
+            forced_id = int(sys.argv[1])
+            ch1 = ChordNode(forced_id)
+        else:
+            ch1 = ChordNode()
         ch1.start(ChordCoordinator.ADDRESS)
     except Exception as exc:
         log.exception(exc)
