@@ -7,7 +7,11 @@ def method_logger(fun):
     """
     def ret_fun(*args, **kwargs):
         log.info(f"{fun.__name__} called with {args[1:]} and {kwargs}")
-        value = fun(*args, **kwargs)
+        try:
+            value = fun(*args, **kwargs)
+        except Exception as exc:
+            log.exception(exc)
+            raise exc
         log.info(f"{fun.__name__} exited returning {value}")
         return value
     return ret_fun

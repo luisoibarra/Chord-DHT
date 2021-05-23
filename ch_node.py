@@ -5,6 +5,8 @@ from ch_coord import ChordCoordinator
 import sys
 import logging as log
 from ch_shared import *
+import time
+import random
 sys.excepthook = Pyro4.util.excepthook
 
 
@@ -42,9 +44,14 @@ class ChordNode:
         """
         return f"{ChordNode.CHORD_NODE_PREFIX}{id}"
 
-    @property
-    def successor(self):
+    def _get_successor(self):
         return self.finger_table[1].successor
+    
+    def _set_successor(self, value):
+        self.finger_table[1].successor = value
+
+    successor = property(_get_successor, _set_successor)
+
     
     def _get_predecessor(self):
         return self.finger_table[0].successor
@@ -67,11 +74,12 @@ class ChordNode:
     
     id = property(_get_id, _set_id)
     
-    def __init__(self, forced_id=None):
+    def __init__(self, forced_id=None, stabilization=True):
         self.listeners = []
         self._id = None
         self.id = forced_id
         self.bits = None
+        self.stabilization = stabilization
         self.running = False
         self.values = {}
         self.executor = ThreadPoolExecutor()
@@ -140,12 +148,29 @@ class ChordNode:
             else:
                 print("Invalid command:\n", help_msg)
     
+    @method_logger
     def leave(self):
         """
         Leave DHT table
         """
-        pass
+        successor_node = self.get_node_proxy(self.successor)
+        predecessor_node = self.get_node_proxy(self.predecessor)
+        successor_node.predecessor = self.predecessor
+        predecessor_node.successor = self.successor
+        successor_node.update_values(self.values)
+        coordinator = create_object_proxy(self.coordinator_address)
+        coordinator.unregister(self.id)
+        self.daemon.shutdown()
     
+    @method_logger
+    def update_values(self, new_values:dict):
+        """
+        Update the values dictionary with new_values
+        """
+        for x in new_values:
+            if self.in_between(x, self.predecessor + 1, self.id + 1):
+                self.values[x] = new_values[x]
+        
     @method_logger
     def start(self, coordinator_address):
         """
@@ -161,6 +186,7 @@ class ChordNode:
             
             # Setting up node
             coordinator = create_object_proxy(coordinator_address)
+            self.coordinator_address = coordinator_address
             self.bits = coordinator.bits
             
             # Getting initial node
@@ -248,9 +274,79 @@ class ChordNode:
             # All finger_table entries are self
             self.finger_table = [FingerTableEntry(self.id, i, self.bits, self.id) for i in range(self.bits+1)]
         else:
+            # All finger_table entries are None
+            self.finger_table = [FingerTableEntry(self.id, i, self.bits, None) for i in range(self.bits+1)]
+            
+        if not self.stabilization:
+            # Full finger table initialization, doesn't do stabilization
             self.init_finger_table(initial_node)
             self.executor.submit(self.init_node_last_part) # Let the current node accept RPC from now on
-            # self.init_node_last_part()
+        else:
+            # More loose table initialization complemented with periodic calls to maintain the table
+            if initial_node != None:
+                self.successor = initial_node.find_successor(self.id)
+            self.executor.submit(self.stabilize_loop)
+            self.executor.submit(self.fix_fingers_loop)
+    
+    @method_logger
+    def stabilize_loop(self):
+        """
+        Periodically calls stabilize method
+        """
+        interval_milliseconds = 2000
+        while self.running:
+            try:
+                self.stabilize()
+            except Exception as exc:
+                log.exception(exc)
+            time.sleep(interval_milliseconds/1000)
+    
+    @method_logger
+    def stabilize(self):
+        """
+        Verifies current node's immediate successor and notifies it about current node's existence
+        """
+        old_successor_node = self.get_node_proxy(self.successor)
+        pred_old_successor_id = old_successor_node.predecessor
+        if pred_old_successor_id != None and self.in_between(pred_old_successor_id, self.id + 1, self.successor):
+            self.successor = pred_old_successor_id
+        old_successor_node.notify(self.id)
+        self.transfer_keys()
+        
+        
+    @method_logger
+    def notify(self, node_id):
+        """
+        Verifies if node_id is a better predecessor, if it is then the predecessor is updated. 
+        """
+        if self.predecessor == None or self.in_between(node_id, self.predecessor + 1, self.id):
+            self.predecessor = node_id
+            predecessor_node = self.get_node_proxy(node_id)
+            predecessor_node.transfer_keys()
+    
+    @method_logger
+    def fix_fingers_loop(self):
+        """
+        Periodically calls fix_fingers method
+        """
+        interval_milliseconds = 2000
+        while self.running:
+            try:
+                self.fix_fingers()
+            except Exception as exc:
+                log.exception(exc)
+            time.sleep(interval_milliseconds/1000)
+    
+    @method_logger
+    def fix_fingers(self):
+        """
+        Randomly updates a finger table's entry
+        """
+        if self.bits < 2:
+            return
+        update_index = random.randint(2, self.bits)
+        finger_table_entry = self.finger_table[update_index]
+        finger_table_entry.successor = self.find_successor(finger_table_entry.start)
     
     @method_logger
     def init_finger_table(self, initial_node):
@@ -296,7 +392,7 @@ class ChordNode:
     @method_logger
     def transfer_keys(self):
         """
-        Brings the successor values for what this node is responsible.
+        Brings the successor key values for what this node is responsible.
         """
         successor_node = self.get_node_proxy(self.successor)
         new_keys = successor_node.pop_keys(self.predecessor, self.id)

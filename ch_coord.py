@@ -39,7 +39,7 @@ class ChordCoordinator:
         """
         Unregister a Chord node.
         """
-        log.info(f"Unregister node {node_id}: {address}")
+        log.info(f"Unregister node {node_id}")
         self.node_addresses.__delitem__(node_id)
     
     @method_logger
