@@ -48,6 +48,7 @@ class ChordNode:
         return self.finger_table[1].successor
     
     def _set_successor(self, value):
+        self.add_successor_list(value)
         self.finger_table[1].successor = value
 
     successor = property(_get_successor, _set_successor)
@@ -74,11 +75,12 @@ class ChordNode:
     
     id = property(_get_id, _set_id)
     
-    def __init__(self, forced_id=None, stabilization=True):
+    def __init__(self, forced_id=None, stabilization=False):
         self.listeners = []
         self._id = None
         self.id = forced_id
         self.bits = None
+        self.successor_list = []
         self.stabilization = stabilization
         self.running = False
         self.values = {}
@@ -153,14 +155,41 @@ class ChordNode:
         """
         Leave DHT table
         """
-        successor_node = self.get_node_proxy(self.successor)
-        predecessor_node = self.get_node_proxy(self.predecessor)
-        successor_node.predecessor = self.predecessor
-        predecessor_node.successor = self.successor
-        successor_node.update_values(self.values)
-        coordinator = create_object_proxy(self.coordinator_address)
-        coordinator.unregister(self.id)
+        try:
+            # Update predecessor and successor and transfer the current keys
+            successor_node = self.get_node_proxy(self.successor)
+            predecessor_node = self.get_node_proxy(self.predecessor)
+            successor_node.predecessor = self.predecessor
+            predecessor_node.successor = self.successor
+            successor_node.update_values(self.values)
+            if not self.stabilization:
+                successor_node.update_leaving_node(self.id, successor_node.id)
+            else:
+                # Stabilization 
+                pass
+        except Exception as exc:
+            log.exception(exc)
+        
+        try:
+            coordinator = create_object_proxy(self.coordinator_address)
+            coordinator.unregister(self.id)
+        except Exception as exc:
+            log.exception(exc)
+            
         self.daemon.shutdown()
+    
+    def update_leaving_node(self, node_id, new_successor_id):
+        """
+        Update finger table having node_id with successor_id
+        """
+        for i in range(1, self.bits + 1):
+            finger_table_entry = self.finger_table[i]
+            if finger_table_entry.successor == node_id:
+                finger_table_entry.successor = new_successor_id
+            elif self.in_between(finger_table_entry.successor, self.id, node_id):
+                successor_id = self.find_successor(finger_table_entry.successor)
+                successor_node = self.get_node_proxy(successor_id)
+                successor_node.update_leaving_node(node_id, new_successor_id)
     
     @method_logger
     def update_values(self, new_values:dict):
@@ -188,6 +217,7 @@ class ChordNode:
             coordinator = create_object_proxy(coordinator_address)
             self.coordinator_address = coordinator_address
             self.bits = coordinator.bits
+            self.max_successor_list_count = self.bits
             
             # Getting initial node
             initial_node_id = coordinator.get_initial_node()
@@ -229,7 +259,10 @@ class ChordNode:
         """
         pred_id = self.find_predecessor(key)
         pred_node = self.get_node_proxy(pred_id)
-        return pred_node.successor
+        try: 
+            return self.get_node_proxy(pred_node.successor).id
+        except:
+            return pred_node.id
     
     @method_logger
     def find_predecessor(self, key):
@@ -240,7 +273,11 @@ class ChordNode:
         
         while not (self.in_between(key, current.id + 1, current.successor + 1)):
             current_id = current.closest_preceding_finger(key)
-            current = self.get_node_proxy(current_id)
+            try:
+                current = self.get_node_proxy(current_id)
+            except:
+                current = self.successor_node_from_succesor_list(key)
+                return current.find_predecessor(key)
             log.info(f"find_predecessor cycle: key:{key} current_id:{current.id}, current_successor:{current.successor}")
         return current.id
     
@@ -249,7 +286,7 @@ class ChordNode:
         Return the closest preceding finger node's id from key
         """
         for i in range(self.bits,0,-1):
-            if self.in_between(self.finger_table[i].successor, self.id + 1, key):
+            if self.finger_table[i].successor != None and self.in_between(self.finger_table[i].successor, self.id + 1, key):
                 return self.finger_table[i].successor
         return self.id
     
@@ -277,11 +314,11 @@ class ChordNode:
             # All finger_table entries are None
             self.finger_table = [FingerTableEntry(self.id, i, self.bits, None) for i in range(self.bits+1)]
             
-        if not self.stabilization:
+        if not self.stabilization and initial_node != None:
             # Full finger table initialization, doesn't do stabilization
             self.init_finger_table(initial_node)
             self.executor.submit(self.init_node_last_part) # Let the current node accept RPC from now on
-        else:
+        elif self.stabilization:
             # More loose table initialization complemented with periodic calls to maintain the table
             if initial_node != None:
                 self.successor = initial_node.find_successor(self.id)
@@ -306,7 +343,8 @@ class ChordNode:
         """
         Verifies current node's immediate successor and notifies it about current node's existence
         """
-        old_successor_node = self.get_node_proxy(self.successor)
+        old_successor_id = self.find_successor(self.successor)
+        old_successor_node = self.get_node_proxy(old_successor_id)
         pred_old_successor_id = old_successor_node.predecessor
         if pred_old_successor_id != None and self.in_between(pred_old_successor_id, self.id + 1, self.successor):
             self.successor = pred_old_successor_id
@@ -355,8 +393,8 @@ class ChordNode:
         """
         self.finger_table = [FingerTableEntry(self.id, i, self.bits, None) for i in range(self.bits+1)]
         
-        successor_id = self.finger_table[1].successor = initial_node.find_successor(self.finger_table[1].start)
-        successor_node = self.get_node_proxy(successor_id)
+        self.successor = initial_node.find_successor(self.finger_table[1].start)
+        successor_node = self.get_node_proxy(self.successor)
         # Update predecessors
         self.predecessor = successor_node.predecessor
         successor_node.predecessor = self.id
@@ -394,8 +432,9 @@ class ChordNode:
         """
         Brings the successor key values for what this node is responsible.
         """
-        successor_node = self.get_node_proxy(self.successor)
-        new_keys = successor_node.pop_keys(self.predecessor, self.id)
+        successor_id = self.find_successor(self.successor)
+        successor_node = self.get_node_proxy(successor_id)
+        new_keys = successor_node.pop_keys(self.predecessor + 1, self.id)
         self.values.update(new_keys)
     
     @method_logger
@@ -409,8 +448,9 @@ class ChordNode:
         values = [self.values[x] for x in keys]
         for k in keys:
             self.values.__delitem__(k)
-            
-        self.executor.submit(self.notify_listeners, keys)
+        
+        if keys:
+            self.executor.submit(self.notify_listeners, keys)
         
         return {k:v for k,v in zip(keys, values)}
                 
@@ -436,3 +476,32 @@ class ChordNode:
         else:
             node = self
         return node
+    
+    def add_successor_list(self, successor_id):
+        """
+        Add successor_id to successor list
+        """
+        self.successor_list.append(successor_id)
+        self.successor_list = list(set(self.successor_list))
+        self.successor_list.sort(key=lambda x: x+(1 << self.bits) if x < self.id else x)
+        self.successor_list = self.successor_list[:self.max_successor_list_count]
+    
+    def successor_node_from_succesor_list(self, key):
+        """
+        Returns the best posible node for key. It looks to the successor_list. 
+        """
+        nodes_ids = self.successor_list.copy()
+        for node_id in nodes_ids:
+            if self.in_between(key, self.id, node_id):
+                try:
+                    node = self.get_node_proxy(node_id)
+                    return node
+                except Exception as exc:
+                    log.error(f"Node {node_id} offline.")
+                    try:
+                        self.successor_list.remove(node_id)
+                    except ValueError:
+                        pass
+        raise ValueError(f"No available successor node for key {key}")
+                    
+                    
