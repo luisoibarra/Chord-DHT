@@ -16,11 +16,11 @@ def method_logger(fun):
         return value
     return ret_fun
         
-def create_object_proxy(name):
+def create_object_proxy(name, ns_host:str, ns_port:int):
     """
     Create an object proxy from the given name 
     """
-    with pyro.locateNS() as ns:
+    with pyro.locateNS(ns_host, ns_port) as ns:
         object_uri = ns.lookup(name)
         return pyro.Proxy(object_uri)
     

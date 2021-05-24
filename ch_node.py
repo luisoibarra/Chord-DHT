@@ -75,8 +75,12 @@ class ChordNode:
     
     id = property(_get_id, _set_id)
     
-    def __init__(self, forced_id=None, stabilization=True):
+    def __init__(self, host=None, port=0, name_server_host=None, name_server_port=None, forced_id=None, stabilization=True):
         self.listeners = []
+        self.host = host
+        self.port = port
+        self.name_server_host = name_server_host
+        self.name_server_port = name_server_port
         self._id = None
         self.id = forced_id
         self.bits = None
@@ -173,7 +177,7 @@ class ChordNode:
             log.exception(exc)
         
         try:
-            coordinator = create_object_proxy(self.coordinator_address)
+            coordinator = create_object_proxy(self.coordinator_address, self.name_server_host, self.name_server_port)
             coordinator.unregister(self.id)
         except Exception as exc:
             log.exception(exc)
@@ -212,11 +216,11 @@ class ChordNode:
         
         self.executor.submit(self.cli_loop)
         
-        with pyro.Daemon() as daemon:
+        with pyro.Daemon(self.host, self.port) as daemon:
             self.daemon = daemon
             
             # Setting up node
-            coordinator = create_object_proxy(coordinator_address)
+            coordinator = create_object_proxy(coordinator_address, self.name_server_host, self.name_server_port)
             self.coordinator_address = coordinator_address
             self.bits = coordinator.bits
             self.max_successor_list_count = self.bits
@@ -231,7 +235,7 @@ class ChordNode:
             # Register node in pyro name server and deamon
             self.dir = daemon.register(self)
             self.id = self.hash(self.dir)
-            with pyro.locateNS() as ns:
+            with pyro.locateNS(self.name_server_host, self.name_server_port) as ns:
                 ns.register(ChordNode.node_name(self.id), self.dir)
             
             # Joining DHT
@@ -290,7 +294,7 @@ class ChordNode:
         """
         Register current node in DHT coordinator
         """
-        coordinator = create_object_proxy(ChordCoordinator.ADDRESS)
+        coordinator = create_object_proxy(ChordCoordinator.ADDRESS, self.name_server_host, self.name_server_port)
         coordinator.register(self.id, self.dir)
             
     @method_logger
@@ -473,7 +477,7 @@ class ChordNode:
         Returns a Chord Node proxy for the given id
         """
         if id != self.id:
-            node = create_object_proxy(ChordNode.node_name(id))
+            node = create_object_proxy(ChordNode.node_name(id), self.name_server_host, self.name_server_port)
         else:
             node = self
         return node

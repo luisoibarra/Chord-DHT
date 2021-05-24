@@ -3,8 +3,7 @@ import random
 import logging as log
 import sys
 from ch_shared import *
-
-BITS = 3
+import plac
 
 @pyro.expose
 @pyro.behavior(instance_mode='single')
@@ -12,9 +11,15 @@ class ChordCoordinator:
     
     ADDRESS = "coordinator.chord"
     
-    def __init__(self, key_bits:int=BITS):
+    def __init__(self, key_bits:int, dm_host:str, dm_port:int, ns_host:str, ns_port:int):
         self.node_addresses = {}
+        self._daemon_host = dm_host
+        self._daemon_port = dm_port
+        self._name_server_host = ns_host
+        self._name_server_port = ns_port
         self._bits = key_bits
+        log.info(f"Started Coordinator with {key_bits} bits")
+        print(key_bits)
         
     @property
     def bits(self):
@@ -22,6 +27,23 @@ class ChordCoordinator:
         Bit amount of the hash key
         """
         return self._bits
+    
+    @property
+    def daemon_host(self):
+        return self._daemon_host
+    
+    @property
+    def daemon_port(self):
+        return self._daemon_port
+    
+    @property
+    def name_server_host(self):
+        return self._name_server_host
+    
+    @property
+    def name_server_port(self):
+        return self._name_server_port
+    
     
     @method_logger
     def register(self, node_id, address):
@@ -54,12 +76,17 @@ class ChordCoordinator:
         log.info(f"No initial node found")
         return None
 
-def main():
-    
+# plac annotation (description, type of arg [option, flag, positional], abrev, type, choices)
+def main(bits:("Hash bits","option","b",int)=5,
+         dm_host:("Pyro daemon host","option","ho",str)=None,
+         dm_port:("Pyro daemon port","option","p",int)=0,
+         ns_host:("Pyro name server host","option","nsh",str)=None,
+         ns_port:("Pyro name server port","option","nsp",int)=None):
     log.basicConfig(level=log.DEBUG)
-    pyro.Daemon.serveSimple({
-        ChordCoordinator: ChordCoordinator.ADDRESS # Cuidado con la direccion
-    })
-    
+    with pyro.Daemon(dm_host, dm_port) as daemon:
+        coord_dir = daemon.register(ChordCoordinator(bits, dm_host, dm_port, ns_host, ns_port))
+        with pyro.locateNS(ns_host, ns_port) as ns:
+            ns.register(ChordCoordinator.ADDRESS, coord_dir)
+        daemon.requestLoop()
 if __name__ == "__main__":
-    main()
+    plac.call(main)
