@@ -9,19 +9,38 @@ import time
 import random
 sys.excepthook = Pyro4.util.excepthook
 
+def operate_id(id1, id2, total_bits, operator):
+    """
+    Operate id1 and id2 with function operator,  using arithmetic modulo 2**total_bits
+    """
+    return operator(id1,id2) % (1 << total_bits)
+
+def sum_id(id1, id2, total_bits):
+    """
+    Sum id1 and id2 using arithmetic modulo 2**total_bits
+    """
+    return operate_id(id1, id2, total_bits, lambda x,y: x + y)
+
+def sub_id(id1, id2, total_bits):
+    """
+    Substract id1 and id2 using arithmetic modulo 2**total_bits
+    """
+    return operate_id(id1, id2, total_bits, lambda x,y: x - y)
+
 
 class FingerTableEntry:
     
     def __init__(self, node_key:int, entry_bit:int, total_bits:int, successor:int=None):
+        self.is_predecessor = entry_bit == 0
+        
         if entry_bit == 0: # Predecessor
             entry_bit = 1 # To avoid negative shift
 
-        self.start = (node_key + (1 << (entry_bit - 1))) % (1 << total_bits)
-        self.end = (self.start + (1 << (entry_bit - 1))) % (1 << total_bits)
+        self.start = sum_id(node_key, 1 << (entry_bit - 1), total_bits)
         self.successor = successor
 
     def __str__(self):
-        return f"{self.start} - {self.end}   {self.successor}"
+        return f"{self.start} -> {self.successor}" if not self.is_predecessor else f"Pred -> {self.successor}"
 
     def __repr__(self):
         return str(self)
@@ -96,7 +115,7 @@ class ChordNode:
         Returns the value associated with the key 
         """
         key = self.hash(key)
-        if self.in_between(key, self.predecessor + 1, self.id + 1):
+        if self.in_between(key, self.sum_id(self.predecessor, 1), self.sum_id(self.id, 1)):
             return self.values[key]
         successor_id = self.find_successor(key)
         successor = self.get_node_proxy(successor_id)
@@ -203,7 +222,7 @@ class ChordNode:
         Update the values dictionary with new_values
         """
         for x in new_values:
-            if self.in_between(x, self.predecessor + 1, self.id + 1):
+            if self.in_between(x, self.sum_id(self.predecessor, 1), self.sum_id(self.id, 1)):
                 self.values[x] = new_values[x]
         
     @method_logger
@@ -274,7 +293,7 @@ class ChordNode:
         """
         current = self
         
-        while not (self.in_between(key, current.id + 1, current.successor + 1)):
+        while not (self.in_between(key, self.sum_id(current.id, 1), self.sum_id(current.successor, 1))):
             current_id = current.closest_preceding_finger(key)
             current = self.get_node_proxy(current_id)
             log.info(f"find_predecessor cycle: key:{key} current_id:{current.id}, current_successor:{current.successor}")
@@ -285,7 +304,7 @@ class ChordNode:
         Return the closest preceding finger node's id from key
         """
         for i in range(self.bits,0,-1):
-            if self.finger_table[i].successor != None and self.in_between(self.finger_table[i].successor, self.id + 1, key):
+            if self.finger_table[i].successor != None and self.in_between(self.finger_table[i].successor, self.sum_id(self.id, 1), key):
                 return self.finger_table[i].successor
         return self.id
     
@@ -346,7 +365,7 @@ class ChordNode:
             old_successor_id = self.find_successor(self.successor)
             old_successor_node = self.get_node_proxy(old_successor_id)
             pred_old_successor_id = old_successor_node.predecessor
-            if pred_old_successor_id != None and self.in_between(pred_old_successor_id, self.id + 1, self.successor):
+            if pred_old_successor_id != None and self.in_between(pred_old_successor_id, self.sum_id(self.id, 1), self.successor):
                 self.successor = pred_old_successor_id
         except Exception as exc:
             log.error(f"{exc}")
@@ -362,7 +381,15 @@ class ChordNode:
         """
         Verifies if node_id is a better predecessor, if it is then the predecessor is updated. 
         """
-        if self.predecessor == None or self.in_between(node_id, self.predecessor + 1, self.id):
+        if self.predecessor != None:
+            try:
+                predecessor_node = self.get_node_proxy(self.predecessor)
+                predecessor_node.id
+            except pyro.errors.CommunicationError as e:
+                log.info(f"Predecessor {self.predecessor} offline")
+                self.predecessor = None
+
+        if self.predecessor == None or self.in_between(node_id, self.sum_id(self.predecessor, 1), self.id):
             self.predecessor = node_id
             predecessor_node = self.get_node_proxy(node_id)
             predecessor_node.transfer_keys()
@@ -428,7 +455,7 @@ class ChordNode:
         """
         for i in range(1, self.bits + 1):
             # In the paper the +1 at the of 2**(i-1) doesn't exist but try example CHORD 3 then CHORD 5 and the FT of 3 doesn't update properly
-            pred_id = self.find_predecessor((self.id - (1 << (i-1)) + 1) % (1 << self.bits))
+            pred_id = self.find_predecessor(self.sub_id(self.id, (1 << (i-1)) - 1))
             pred_node = self.get_node_proxy(pred_id)
             pred_node.update_finger_table(self.id, i)
             
@@ -439,7 +466,7 @@ class ChordNode:
         """
         successor_id = self.find_successor(self.successor)
         successor_node = self.get_node_proxy(successor_id)
-        new_keys = successor_node.pop_keys(self.predecessor + 1, self.id)
+        new_keys = successor_node.pop_keys(self.sum_id(self.predecessor, 1), self.id)
         self.values.update(new_keys)
     
     @method_logger
@@ -449,7 +476,7 @@ class ChordNode:
         
         Return the removed part of the dictionary.
         """
-        keys = [x for x in self.values if self.in_between(x, lower_bound, upper_bound + 1)]
+        keys = [x for x in self.values if self.in_between(x, lower_bound, self.sum_id(upper_bound, 1))]
         values = [self.values[x] for x in keys]
         for k in keys:
             self.values.__delitem__(k)
@@ -490,6 +517,18 @@ class ChordNode:
         self.successor_list = list(set(self.successor_list))
         self.successor_list.sort(key=lambda x: x+(1 << self.bits) if x < self.id else x)
         self.successor_list = self.successor_list[:self.max_successor_list_count]
+    
+    def sum_id(self, id1, id2):
+        """
+        Sum id1 and id2 with arithmetic modulo 2**bits
+        """
+        return sum_id(id1, id2, self.bits)
+    
+    def sub_id(self, id1, id2):
+        """
+        Substract id1 and id2 with arithmetic modulo 2**bits
+        """
+        return sub_id(id1, id2, self.bits)
     
     def successor_node_from_succesor_list(self):
         """
