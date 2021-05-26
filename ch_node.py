@@ -265,13 +265,13 @@ class ChordNode:
         
         self.running = False
     
-    def in_between(self, key, lwb, upb):
+    def in_between(self, key, lwb, upb, equals=True):
         """
         Checks if key is between lwb and upb with modulus 2**bits
         """
         max_nodes = 1 << self.bits
         if lwb == upb:
-            return True
+            return equals
         elif lwb < upb:                   
             return lwb <= key and key < upb
         else:                             
@@ -365,9 +365,9 @@ class ChordNode:
             old_successor_id = self.find_successor(self.successor)
             old_successor_node = self.get_node_proxy(old_successor_id)
             pred_old_successor_id = old_successor_node.predecessor
-            if pred_old_successor_id != None and self.in_between(pred_old_successor_id, self.sum_id(self.id, 1), self.successor):
+            if pred_old_successor_id != None and self.in_between(pred_old_successor_id, self.sum_id(self.id, 1), self.successor, equals=False):
                 self.successor = pred_old_successor_id
-        except Exception as exc:
+        except pyro.errors.CommunicationError as exc:
             log.error(f"{exc}")
             new_successor = self.successor_node_from_succesor_list()
             self.successor = new_successor.id
@@ -532,7 +532,7 @@ class ChordNode:
     
     def successor_node_from_succesor_list(self):
         """
-        Returns the best posible node for key. It looks to the successor_list and finger table entries. 
+        Returns the best posible node for key. It looks to the successor_list and finger table entries, if any are active the only active si self. 
         """
         
         def return_node(node_id):
@@ -561,6 +561,7 @@ class ChordNode:
                 if node:
                     return node
         
-        raise ValueError(f"No available successor node")
+        # raise ValueError(f"No available successor node") 
+        return self.id
                     
                     
