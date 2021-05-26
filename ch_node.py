@@ -369,7 +369,7 @@ class ChordNode:
                 self.successor = pred_old_successor_id
         except pyro.errors.CommunicationError as exc:
             log.error(f"{exc}")
-            new_successor = self.successor_node_from_succesor_list()
+            new_successor = self.search_posible_successor()
             self.successor = new_successor.id
             old_successor_node = new_successor
         old_successor_node.notify(self.id)
@@ -530,9 +530,11 @@ class ChordNode:
         """
         return sub_id(id1, id2, self.bits)
     
-    def successor_node_from_succesor_list(self):
+    def search_posible_successor(self):
         """
-        Returns the best posible node for key. It looks to the successor_list and finger table entries, if any are active the only active si self. 
+        Returns a possible new active successor.   
+        It looks to the successor_list and finger table entries.  
+        If any are active the only active si self. 
         """
         
         def return_node(node_id):
