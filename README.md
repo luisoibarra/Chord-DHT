@@ -2,6 +2,14 @@
 
 Se implementó una distributed hash table (DHT) usando el protocolo *Chord* mediante el uso de remote procedure calls (RPC) con la biblioteca **Pyro4.**  
 
+## Arquitectura
+
+Para construir la tabla se crean varios nodos que implementan Chord corriendo en diferentes procesos.  
+El proceso de selección de un nodo inicial se lleva a cabo con un servidor el cual guarda los
+nodos activos de la DHT.  
+Para manejar las direcciones con mayor facilidad a cada objeto se le asigna un nombre único
+y se guarda en un name server de Pyro para su posterior consumo.  
+
 ## Uso
 
 Realizar los siguientes pasos en consolas diferentes, estos comandos poseen otros parámetros, pero para el funcionamiento local basta con correrlos tal cual:
@@ -18,7 +26,10 @@ Realizar los siguientes pasos en consolas diferentes, estos comandos poseen otro
 
 >> $ python3 ch_init.py
 
-4. Para probar el sistema se creó un pequeño cliente con funciones básicas.
+4. Para probar el sistema se creó un pequeño cliente con funciones básicas como guardar y extraer datos de la tabla.
 
 >> $ python3 ch_client.py
 
+Para mayor comodidad correr el script *ch_example.py*, el cual te hace los pasos anteriores de forma automática y crea una pequeña DHT lista para el uso.
+
+>> $ python3 ch_example.py

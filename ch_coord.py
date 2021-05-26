@@ -4,6 +4,7 @@ import logging as log
 import sys
 from ch_shared import *
 import plac
+from concurrent.futures import ThreadPoolExecutor, Future
 
 @pyro.expose
 @pyro.behavior(instance_mode='single')
@@ -44,7 +45,26 @@ class ChordCoordinator:
     def name_server_port(self):
         return self._name_server_port
     
+    def cli_loop(self):
+        help_msg = "Commands\nnodes: prints the node's ids of the registered nodes"
+        print(help_msg)
+        
+        while True:
+            command = input()
+            if command == "nodes":
+                print("\n".join([f"- ".join([str(x) for x in self.node_addresses])]))
+            else:
+                print(help_msg)
     
+    def start(self):
+        with pyro.Daemon(self.daemon_host, self.daemon_port) as daemon:
+            coord_dir = daemon.register(self)
+            with pyro.locateNS(self.name_server_host, self.name_server_port) as ns:
+                ns.register(ChordCoordinator.ADDRESS, coord_dir)
+            executor = ThreadPoolExecutor()
+            executor.submit(self.cli_loop)
+            daemon.requestLoop()
+
     @method_logger
     def register(self, node_id, address):
         """
@@ -71,8 +91,14 @@ class ChordCoordinator:
         """
         if self.node_addresses:
             node_id, node_address = random.choice([x for x in self.node_addresses.items()])
-            log.info(f"Returned initial node {node_id} with address {node_address}")
-            return node_id
+            try:
+                node = pyro.Proxy(node_address)
+                log.info(f"Returned initial node {node_id} with address {node_address}")
+                return node.id
+            except pyro.errors.CommunicationError:
+                log.info(f"Node {node_id} offline")
+                self.unregister(node_id)
+                return self.get_initial_node()
         log.info(f"No initial node found")
         return None
 
@@ -83,10 +109,9 @@ def main(bits:("Hash bits","option","b",int)=5,
          ns_host:("Pyro name server host","option","nsh",str)=None,
          ns_port:("Pyro name server port","option","nsp",int)=None):
     log.basicConfig(level=log.DEBUG)
-    with pyro.Daemon(dm_host, dm_port) as daemon:
-        coord_dir = daemon.register(ChordCoordinator(bits, dm_host, dm_port, ns_host, ns_port))
-        with pyro.locateNS(ns_host, ns_port) as ns:
-            ns.register(ChordCoordinator.ADDRESS, coord_dir)
-        daemon.requestLoop()
+    coordinator = ChordCoordinator(bits, dm_host, dm_port, ns_host, ns_port)
+    coordinator.start()
+    
+    
 if __name__ == "__main__":
     plac.call(main)
