@@ -18,7 +18,7 @@ def main(host:("Chord node host","option","ho",str)=None,
          ns_host:("Name server host","option","nsh",str)=None,
          ns_port:("Name server port","option","nsp",str)=None,
          forced_id:("Force the node id","option","id",int)=None):
-    log.basicConfig(level=log.DEBUG)
+    log.basicConfig(level=log.DEBUG,format='[%(asctime)s] %(levelname)s - %(message)s')
     try:
         ch1 = ChordNode(host, port, ns_host, ns_port, forced_id)
         ch1.register_listener(DummyListener())

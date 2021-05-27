@@ -54,7 +54,7 @@ class ChordNode:
         """
         Hash function used by ChordNode
         """
-        return hash(value) % (1 << self.bits) 
+        return hash(value) % (self.max_nodes) 
     
     @staticmethod
     def node_name(id):
@@ -242,6 +242,7 @@ class ChordNode:
             coordinator = create_object_proxy(coordinator_address, self.name_server_host, self.name_server_port)
             self.coordinator_address = coordinator_address
             self.bits = coordinator.bits
+            self.max_nodes = 1 << self.bits
             self.max_successor_list_count = self.bits
             
             # Getting initial node
@@ -269,13 +270,12 @@ class ChordNode:
         """
         Checks if key is between lwb and upb with modulus 2**bits
         """
-        max_nodes = 1 << self.bits
         if lwb == upb:
             return equals
         elif lwb < upb:                   
             return lwb <= key and key < upb
         else:                             
-            return (lwb <= key and key < upb + max_nodes) or (lwb <= key + max_nodes and key < upb)                    
+            return (lwb <= key and key < upb + self.max_nodes) or (lwb <= key + self.max_nodes and key < upb)                    
    
     @method_logger
     def find_successor(self, key):
@@ -437,7 +437,11 @@ class ChordNode:
             if self.in_between(upper_entry.start, self.id, current_entry.successor):
                 upper_entry.successor = current_entry.successor
             else:
-                upper_entry.successor = initial_node.find_successor(upper_entry.start)
+                without_this_node_succ = initial_node.find_successor(upper_entry.start)
+                if self.in_between(self.id, upper_entry.start, without_this_node_succ, equals=False):
+                    upper_entry.successor = self.id
+                else:
+                    upper_entry.successor = without_this_node_succ
     
     @method_logger
     def init_node_last_part(self):
@@ -455,7 +459,7 @@ class ChordNode:
         """
         for i in range(1, self.bits + 1):
             # In the paper the +1 at the of 2**(i-1) doesn't exist but try example CHORD 3 then CHORD 5 and the FT of 3 doesn't update properly
-            pred_id = self.find_predecessor(self.sub_id(self.id, (1 << (i-1)) - 1))
+            pred_id = self.find_predecessor(self.sub_id(self.id, (2 ** (i-1)) - 1))
             pred_node = self.get_node_proxy(pred_id)
             pred_node.update_finger_table(self.id, i)
             
@@ -515,7 +519,7 @@ class ChordNode:
         """
         self.successor_list.append(successor_id)
         self.successor_list = list(set(self.successor_list))
-        self.successor_list.sort(key=lambda x: x+(1 << self.bits) if x < self.id else x)
+        self.successor_list.sort(key=lambda x: x+(self.max_nodes) if x < self.id else x)
         self.successor_list = self.successor_list[:self.max_successor_list_count]
     
     def sum_id(self, id1, id2):
