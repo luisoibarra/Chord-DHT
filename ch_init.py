@@ -17,10 +17,11 @@ def main(host:("Chord node host","option","ho",str)=None,
          port:("Chord node port","option","p",str)=0,
          ns_host:("Name server host","option","nsh",str)=None,
          ns_port:("Name server port","option","nsp",str)=None,
-         forced_id:("Force the node id","option","id",int)=None):
+         forced_id:("Force the node id","option","id",int)=None,
+         not_stable:("If run stabilization algorithm","flag","s",bool)=False):
     log.basicConfig(level=log.DEBUG,format='[%(asctime)s] %(levelname)s - %(message)s')
     try:
-        ch1 = ChordNode(host, port, ns_host, ns_port, forced_id)
+        ch1 = ChordNode(host, port, ns_host, ns_port, forced_id, not not_stable)
         ch1.register_listener(DummyListener())
         ch1.start(ChordCoordinator.ADDRESS)
     except Exception as exc:
