@@ -108,7 +108,7 @@ def main(bits:("Hash bits","option","b",int)=5,
          dm_port:("Pyro daemon port","option","p",int)=0,
          ns_host:("Pyro name server host","option","nsh",str)=None,
          ns_port:("Pyro name server port","option","nsp",int)=None):
-    log.basicConfig(level=log.DEBUG)
+    log.basicConfig(level=log.DEBUG, format='[%(asctime)s] %(levelname)s - %(message)s')
     coordinator = ChordCoordinator(bits, dm_host, dm_port, ns_host, ns_port)
     coordinator.start()
     
